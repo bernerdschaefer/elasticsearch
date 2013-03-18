@@ -114,6 +114,8 @@ func (n *Node) GetHealth() Health {
 // body. It returns the raw bytes of the response, and leaves it to the caller
 // to marshal those bytes into the relevant response structure.
 func (n *Node) searchCommon(f Fireable) ([]byte, error) {
+	method := f.Method()
+
 	u, err := url.Parse(n.endpoint)
 	if err != nil {
 		return []byte{}, err
@@ -121,12 +123,13 @@ func (n *Node) searchCommon(f Fireable) ([]byte, error) {
 	u.Path = f.Path()
 	u.RawQuery = f.Values().Encode()
 
-	body, err := f.Body()
-	if err != nil {
+	buf := new(bytes.Buffer)
+
+	if err := f.Serialize(buf); err != nil {
 		return []byte{}, err
 	}
 
-	req, err := http.NewRequest("GET", u.String(), bytes.NewBuffer(body))
+	req, err := http.NewRequest(method, u.String(), buf)
 	if err != nil {
 		return []byte{}, err
 	}

@@ -1,6 +1,7 @@
 package elasticsearch_test
 
 import (
+	"bytes"
 	es "github.com/peterbourgon/elasticsearch"
 	"net/url"
 	"strings"
@@ -87,7 +88,7 @@ func TestSearchRequestValues(t *testing.T) {
 }
 
 func TestMultiSearchRequestBody(t *testing.T) {
-	m := es.MultiSearchRequest([]es.SearchRequest{
+	m := es.MultiSearchRequest{
 		es.SearchRequest{
 			Indices: []string{},
 			Types:   []string{},
@@ -113,7 +114,7 @@ func TestMultiSearchRequestBody(t *testing.T) {
 			Types:   []string{"t1", "t2", "t3"},
 			Query:   map[string]interface{}{"query": "5"},
 		},
-	})
+	}
 
 	if expected, got := "/_msearch", m.Path(); expected != got {
 		t.Errorf("Path: expected '%s', got '%s'", expected, got)
@@ -134,10 +135,11 @@ func TestMultiSearchRequestBody(t *testing.T) {
 		},
 		"\n",
 	) + "\n"
-	got, err := m.Body()
-	if err != nil {
+	buf := new(bytes.Buffer)
+	if err := m.Serialize(buf); err != nil {
 		t.Fatal(err)
 	}
+	got := buf.Bytes()
 	if expected != string(got) {
 		t.Errorf("Body: expected:\n---\n%s\n---\ngot:\n---\n%s\n---\n", expected, got)
 	}
@@ -154,7 +156,7 @@ func TestSearchRequestUnspecifiedValues(t *testing.T) {
 }
 
 func TestMultiSearchRequestMergesValues(t *testing.T) {
-	requests := []es.SearchRequest{
+	request := es.MultiSearchRequest{
 		es.SearchRequest{
 			Params: url.Values{"foo": []string{"a", "b"}},
 		},
@@ -162,7 +164,6 @@ func TestMultiSearchRequestMergesValues(t *testing.T) {
 			Params: url.Values{"foo": []string{"b", "c"}},
 		},
 	}
-	request := es.MultiSearchRequest(requests)
 	v := request.Values()
 	a := v["foo"]
 	t.Logf("foo: %v", a)

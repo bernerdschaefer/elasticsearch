@@ -1,21 +1,35 @@
 package elasticsearch
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/url"
 	"strings"
 )
 
 // Fireable defines anything which can be fired against the search cluster.
-// A Fireable will always be transformed into a HTTP GET against the given
-// Path(), with the given Values() as parameters, and the given Body().
+//
+// A Fireable will always be transformed into an HTTP request where:
+//
+//		- the request method is Method()
+//		- the request uri's path is Path()
+//		- the request uri's parameters are Values()
+//		- the request's body is written with Serialize()
+//
 type Fireable interface {
+	Method() string
 	Path() string
+	Serialize(w io.Writer) error
 	Values() url.Values
-	Body() ([]byte, error)
+}
+
+// BatchFireable defines a batch operation against the search cluster, namely,
+// a multi search or bulk index operation.
+type BatchFireable interface {
+	Fireable
+	SerializeBatchHeader(w io.Writer) error
 }
 
 //
@@ -27,6 +41,10 @@ type SearchRequest struct {
 	Types   []string
 	Query   SubQuery
 	Params  url.Values // can be nil unless explicitly set
+}
+
+func (r SearchRequest) Method() string {
+	return "GET"
 }
 
 func (r SearchRequest) Path() string {
@@ -65,15 +83,31 @@ func (r SearchRequest) Values() url.Values {
 	return r.Params
 }
 
-func (r SearchRequest) Body() ([]byte, error) {
-	return json.Marshal(r.Query)
+func (r SearchRequest) Serialize(w io.Writer) error {
+	return json.NewEncoder(w).Encode(r.Query)
+}
+
+func (r SearchRequest) SerializeBatchHeader(w io.Writer) error {
+	type headerLine struct {
+		Indices []string `json:"index,omitempty"`
+		Types   []string `json:"type,omitempty"`
+	}
+
+	return json.NewEncoder(w).Encode(headerLine{
+		Indices: r.Indices,
+		Types:   r.Types,
+	})
 }
 
 //
 //
 //
 
-type MultiSearchRequest []SearchRequest
+type MultiSearchRequest []BatchFireable
+
+func (r MultiSearchRequest) Method() string {
+	return "GET"
+}
 
 func (r MultiSearchRequest) Path() string {
 	return "/_msearch"
@@ -91,34 +125,18 @@ func (r MultiSearchRequest) Values() url.Values {
 	return v
 }
 
-func (r MultiSearchRequest) Body() ([]byte, error) {
-	type headerLine struct {
-		Indices []string `json:"index,omitempty"`
-		Types   []string `json:"type,omitempty"`
-	}
-
-	lines := [][]byte{}
+func (r MultiSearchRequest) Serialize(w io.Writer) error {
 	for _, searchRequest := range r {
-		headerBuf, err := json.Marshal(headerLine{
-			Indices: searchRequest.Indices,
-			Types:   searchRequest.Types,
-		})
-		if err != nil {
+		if err := searchRequest.SerializeBatchHeader(w); err != nil {
 			log.Printf("ElasticSearch: MultiSearchRequest Body header: %s", err)
 			continue
 		}
 
-		bodyBuf, err := searchRequest.Body()
-		if err != nil {
+		if err := searchRequest.Serialize(w); err != nil {
 			log.Printf("ElasticSearch: MultiSearchRequest Body body: %s", err)
 			continue
 		}
-
-		lines = append(lines, headerBuf)
-		lines = append(lines, bodyBuf)
 	}
 
-	// need trailing '\n'
-	// http://www.elasticsearch.org/guide/reference/api/multi-search.html
-	return append(bytes.Join(lines, []byte{'\n'}), '\n'), nil
+	return nil
 }
